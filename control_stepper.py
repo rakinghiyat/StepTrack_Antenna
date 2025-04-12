@@ -1,40 +1,42 @@
 from pywinusb import hid
 import serial
+import time
 
 # Inisialisasi koneksi serial ke Arduino
-arduino = serial.Serial('COM5', 9600)  # Ganti sesuai port kamu
+arduino = serial.Serial('COM5', 9600)  # Ganti COM sesuai dengan Arduino kamu
 print("Terhubung ke Arduino...")
 
-current_bearing = 0  # Simpan bearing secara lokal di Python
+# Variabel untuk menyimpan status
+rotation_counter = 0
+last_sent_bearing = -1
+last_move_time = time.time()
+debounce_time = 0.3  # dalam detik: waktu jeda dianggap selesai berputar
 
-def update_bearing_display():
-    global current_bearing
-    deg = current_bearing % 360
-    print(f"[Python] Bearing: {deg}°")
+# Fungsi menghitung bearing dari counter
+def calculate_bearing(steps, steps_per_rev=200, microsteps=4):
+    total_steps = steps_per_rev * microsteps
+    bearing = (steps % total_steps) * (360 / total_steps)
+    return round(bearing) % 360
 
+# Handler untuk knob
 def knob_handler(data):
-    global current_bearing
+    global rotation_counter, last_sent_bearing, last_move_time
+
     print(f"Data mentah: {data}")
-
-    button = data[1]
     delta = data[2]
+    button = data[1]
 
+    # Interpretasi delta
     if delta == 1:
-        print("Knob diputar searah jarum jam (+1)")
-        arduino.write(b'R')
-        current_bearing += 1
-        update_bearing_display()
-    elif delta == 255:
-        print("Knob diputar berlawanan arah jarum jam (-1)")
-        arduino.write(b'L')
-        current_bearing -= 1
-        update_bearing_display()
+        rotation_counter += 1
+        last_move_time = time.time()
+    elif delta == 255:  # -1 dalam unsigned byte
+        rotation_counter -= 1
+        last_move_time = time.time()
 
+    # Tombol (opsional)
     if button == 1:
         print("Tombol ditekan")
-        arduino.write(b'C')
-        current_bearing = 0
-        update_bearing_display()
 
 # Deteksi PowerMate
 all_devices = hid.HidDeviceFilter().get_devices()
@@ -53,7 +55,17 @@ else:
 
     try:
         while True:
-            pass
+            time.sleep(0.05)  # Cegah CPU 100%
+            elapsed = time.time() - last_move_time
+
+            # Kirim bearing hanya saat sudah tidak ada gerakan
+            if elapsed > debounce_time:
+                bearing = calculate_bearing(rotation_counter)
+                if bearing != last_sent_bearing:
+                    print(f"[Bearing akhir dikirim: {bearing}°]")
+                    arduino.write((str(bearing) + '\n').encode())
+                    last_sent_bearing = bearing
+
     except KeyboardInterrupt:
         print("Program dihentikan.")
     finally:
