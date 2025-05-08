@@ -4,7 +4,7 @@ import threading
 import time
 
 # --- Konfigurasi Serial dan Variabel ---
-arduino = serial.Serial('COM3', 115200)
+arduino = serial.Serial('COM5', 115200)
 print("Terhubung ke Arduino...")
 
 knob_direction = 0
@@ -16,7 +16,8 @@ TIMEOUT = 0.2
 # --- Variabel bearing ---
 bearing = 0
 step_count = 0
-steps_per_click = 1.8 / 4  # 1.8° per step, microstep = 4 → 0.45°
+steps_per_revolution = 800  # 800 langkah per putaran penuh
+degrees_per_step = 360.0 / steps_per_revolution  # 360° dibagi 800 langkah = 0.45° per langkah
 
 def normalize_bearing(b):
     b = b % 360
@@ -25,6 +26,10 @@ def normalize_bearing(b):
 # --- Fungsi driver untuk kontrol motor berdasarkan knob ---
 def stepper_driver_loop():
     global knob_direction, knob_speed_delay, step_count, bearing
+
+    # Delay awal untuk menghindari gerakan tidak sengaja
+    time.sleep(1)
+
     while True:
         now = time.time()
         with lock:
@@ -37,12 +42,12 @@ def stepper_driver_loop():
             arduino.write(b'R')
             with lock:
                 step_count += 1
-                bearing = normalize_bearing(step_count * steps_per_click)
+                bearing = normalize_bearing(step_count * degrees_per_step)
         elif dir == -1:
             arduino.write(b'L')
             with lock:
                 step_count -= 1
-                bearing = normalize_bearing(step_count * steps_per_click)
+                bearing = normalize_bearing(step_count * degrees_per_step)
 
         if dir != 0:
             print(f"Bearing: {bearing:.2f}°")
@@ -60,9 +65,9 @@ def manual_input_loop():
                 continue
 
             with lock:
-                current_bearing = normalize_bearing(step_count * steps_per_click)
+                current_bearing = normalize_bearing(step_count * degrees_per_step)
                 delta = (target - current_bearing + 540) % 360 - 180
-                steps_needed = int(round(delta / steps_per_click))
+                steps_needed = int(round(delta / degrees_per_step))
                 direction = 'R' if steps_needed > 0 else 'L'
 
                 for _ in range(abs(steps_needed)):
@@ -70,16 +75,22 @@ def manual_input_loop():
                     step_count += 1 if direction == 'R' else -1
                     time.sleep(0.005)
 
-                bearing = normalize_bearing(step_count * steps_per_click)
+                bearing = normalize_bearing(step_count * degrees_per_step)
                 print(f"Posisi kini: {bearing:.2f}°")
         except ValueError:
             print("Input tidak valid. Harap masukkan angka 0–359.")
 
 # --- Fungsi handler dari knob PowerMate ---
 last_event_time = time.time()
+first_knob_event = True  # Untuk menghindari event palsu di awal
 
 def knob_handler(data):
-    global knob_direction, last_knob_event, knob_speed_delay, last_event_time
+    global knob_direction, last_knob_event, knob_speed_delay, last_event_time, first_knob_event
+
+    if first_knob_event:
+        print("Mengabaikan event pertama PowerMate")
+        first_knob_event = False
+        return
 
     delta = data[2]
     button = data[1]
@@ -110,6 +121,8 @@ def knob_handler(data):
             print("Bearing di-reset ke 0°")
             last_knob_event = time.time()
 
+    print(f"[DEBUG] knob_handler: delta={delta}, button={button}, dir={knob_direction}, delay={knob_speed_delay:.4f}")
+
 # --- Deteksi PowerMate ---
 all_devices = hid.HidDeviceFilter().get_devices()
 powermate = None
@@ -128,7 +141,7 @@ else:
 
     # Thread: knob kontrol ke motor
     threading.Thread(target=stepper_driver_loop, daemon=True).start()
-    
+
     # Thread: input manual dari terminal
     threading.Thread(target=manual_input_loop, daemon=True).start()
 
