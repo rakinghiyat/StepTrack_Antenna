@@ -34,10 +34,12 @@ void loop() {
     char c = Serial.read();
     if (c == 'R') {
       stepper.move(1);  // gerakkan motor satu langkah
+      delay(20);        // beri waktu motor untuk bergerak
       sendRawValue();   // kirimkan nilai raw setelah motor bergerak
     }
     else if (c == 'L') {
       stepper.move(-1);  // gerakkan motor satu langkah berlawanan arah
+      delay(20);         // beri waktu motor untuk bergerak
       sendRawValue();    // kirimkan nilai raw setelah motor bergerak
     }
     else if (c == 'C') {
@@ -45,27 +47,21 @@ void loop() {
     }
   }
 
-  // Cek raw angle setiap 50ms (mempercepat pembacaan)
-  if (millis() - lastSend > 50) {
+  // Cek raw angle setiap 100ms (bukan dalam loop utama, agar tidak mengganggu perintah manual)
+  if (millis() - lastSend > 100) {
     sendRawValue();
     lastSend = millis();
   }
 }
 
-int lastRawAngle = -1;  // Variabel untuk menyimpan nilai RAW sebelumnya
-
 void sendRawValue() {
-  // Baca angle sensor
+  // Baca angle sensor dari AS5600
   int rawAngle = encoder.readAngle();  // 0–4095
-  float angleDeg = (rawAngle * 360.0) / 4096.0;
+  float angleDeg = (rawAngle * 360.0) / 4096.0;  // konversi ke sudut dalam derajat
 
-  // Hanya kirim jika ada perubahan pada rawAngle
-  if (rawAngle != lastRawAngle) {
-    // Kirim hanya nilai raw dan sudut (tanpa print di serial monitor)
-    Serial.print("Raw Angle: ");
-    Serial.print(rawAngle);  // Kirim nilai RAW
-    Serial.print(" | Angle (°): ");
-    Serial.println(angleDeg, 2);  // Kirim nilai Angle dalam derajat
-    lastRawAngle = rawAngle;  // Update nilai rawAngle yang terakhir
-  }
+  // Tampilkan hasil raw angle dan angle dalam derajat
+  Serial.print("Raw Angle: ");
+  Serial.print(rawAngle);   // Nilai RAW
+  Serial.print(" | Angle (°): ");
+  Serial.println(angleDeg, 2);  // Nilai sudut dalam derajat dengan 2 desimal
 }
