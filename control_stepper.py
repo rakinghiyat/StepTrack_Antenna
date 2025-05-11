@@ -19,7 +19,6 @@ knob_speed_delay = 0.01
 TIMEOUT = 0.2
 
 bearing = 0
-step_count = 0
 steps_per_click = 1.8 / 4  # 0.45° per step
 lock = threading.Lock()
 stop_event = threading.Event()
@@ -50,7 +49,7 @@ def load_calibration_data():
         return json.load(f)
 
 def initial_calibration():
-    global step_count, bearing, calibration_data
+    global bearing, calibration_data
 
     try:
         print("Menunggu data dari Arduino untuk kalibrasi awal...")
@@ -84,10 +83,10 @@ def initial_calibration():
             arduino.write(direction.encode())
             time.sleep(0.005)
 
-        # Sinkronisasi bearing setelah motor sudah bergerak
-        step_count = int(round(target_raw / (4096 / 360.0) / steps_per_click))
-        bearing = normalize_bearing(calibration_data["last_bearing"])
+        # Setelah motor sudah selesai bergerak
+        bearing = calibration_data["last_bearing"]
         print(f"Kalibrasi awal selesai. Disinkronkan ke RAW: {target_raw}, bearing dilanjutkan dari: {bearing:.2f}°")
+
 
     except Exception as e:
         print(f"Kesalahan saat kalibrasi awal: {e}")
@@ -104,12 +103,12 @@ def read_from_arduino():
                 if raw_value != last_raw_value or angle_deg != last_angle_deg:
                     last_raw_value = raw_value
                     last_angle_deg = angle_deg
-                    print(f"Bearing: {bearing:.2f}° -> RAW angle diterima: {raw_value}, Angle (°): {angle_deg:.2f}")
+                    print(f"Bearing AS5600: {bearing:.2f}° -> RAW angle diterima: {raw_value}")
         except Exception as e:
             print(f"Error membaca serial: {e}")
 
 def stepper_driver_loop():
-    global knob_direction, knob_speed_delay, step_count, bearing
+    global knob_direction, knob_speed_delay, bearing
     while not stop_event.is_set():
         now = time.time()
         with lock:
@@ -121,20 +120,20 @@ def stepper_driver_loop():
         if dir == 1:
             arduino.write(b'R')
             with lock:
-                step_count += 1
-                bearing = normalize_bearing(step_count * steps_per_click)
+                bearing += steps_per_click
+                bearing = normalize_bearing(bearing)
         elif dir == -1:
             arduino.write(b'L')
             with lock:
-                step_count -= 1
-                bearing = normalize_bearing(step_count * steps_per_click)
+                bearing -= steps_per_click
+                bearing = normalize_bearing(bearing)
 
         if dir != 0:
-            print(f"Bearing: {bearing:.2f}°")
+            print(f"Bearing AS5600: {bearing:.2f}°")
         time.sleep(delay)
 
 def manual_input_loop():
-    global step_count, bearing
+    global bearing
     while not stop_event.is_set():
         try:
             target = input("Masukkan target bearing (0–359): ")
@@ -145,19 +144,18 @@ def manual_input_loop():
                 print("Masukkan antara 0–359.")
                 continue
 
-            with lock:
-                current_bearing = normalize_bearing(step_count * steps_per_click)
-                delta = (target - current_bearing + 540) % 360 - 180
-                steps_needed = int(round(delta / steps_per_click))
-                direction = 'R' if steps_needed > 0 else 'L'
+            # Menghitung perbedaan dan menggerakkan motor
+            delta = (target - bearing + 540) % 360 - 180
+            steps_needed = int(round(delta / steps_per_click))
+            direction = 'R' if steps_needed > 0 else 'L'
 
-                for _ in range(abs(steps_needed)):
-                    arduino.write(direction.encode())
-                    step_count += 1 if direction == 'R' else -1
-                    bearing = normalize_bearing(step_count * steps_per_click)
-                    time.sleep(0.005)
+            for _ in range(abs(steps_needed)):
+                arduino.write(direction.encode())
+                bearing += steps_per_click if direction == 'R' else -steps_per_click
+                bearing = normalize_bearing(bearing)
+                time.sleep(0.005)
 
-                print(f"Posisi kini: {bearing:.2f}°")
+            print(f"Posisi kini: {bearing:.2f}°")
 
         except ValueError:
             print("Input tidak valid. Harap masukkan angka 0–359.")
@@ -167,7 +165,7 @@ def manual_input_loop():
 last_event_time = time.time()
 
 def knob_handler(data):
-    global knob_direction, last_knob_event, knob_speed_delay, last_event_time, step_count, bearing
+    global knob_direction, last_knob_event, knob_speed_delay, last_event_time, bearing
     delta = data[2]
     button = data[1]
     now = time.time()
@@ -190,7 +188,6 @@ def knob_handler(data):
         with lock:
             knob_direction = 0
             bearing = 0
-            step_count = 0
             print("Bearing di-reset ke 0°")
             last_knob_event = time.time()
 
@@ -222,9 +219,7 @@ else:
         time.sleep(0.5)
     finally:
         if last_raw_value is not None:
-            # Hitung bearing berdasarkan raw terakhir
-            last_bearing = normalize_bearing(step_count * steps_per_click)
-            save_calibration_data(last_bearing, last_raw_value)
-            print(f"Data terakhir disimpan ke file kalibrasi: Bearing {last_bearing:.2f}°, Raw {last_raw_value}")
+            save_calibration_data(bearing, last_raw_value)
+            print(f"Data terakhir disimpan ke file kalibrasi: Bearing {bearing:.2f}°, Raw {last_raw_value}")
         powermate.close()
         arduino.close()
