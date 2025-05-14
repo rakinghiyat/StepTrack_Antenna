@@ -92,17 +92,19 @@ def initial_calibration():
         print(f"Kesalahan saat kalibrasi awal: {e}")
 
 def read_from_arduino():
-    global last_raw_value, last_angle_deg
+    global last_raw_value, last_angle_deg, bearing
     while not stop_event.is_set():
         try:
             line = arduino.readline().decode('utf-8').strip()
             if line.startswith("Raw Angle:"):
                 parts = line.split(" | ")
                 raw_value = int(parts[0].split(":")[1].strip())
-                angle_deg = float(parts[1].split(":")[1].strip())
+                # Hitung bearing berdasarkan nilai raw
+                angle_deg = (raw_value / 4096.0) * 360.0  # Menghitung bearing dari raw data
                 if raw_value != last_raw_value or angle_deg != last_angle_deg:
                     last_raw_value = raw_value
                     last_angle_deg = angle_deg
+                    bearing = angle_deg  # Update bearing berdasarkan raw
                     print(f"Bearing AS5600: {bearing:.2f}° -> RAW angle diterima: {raw_value}")
         except Exception as e:
             print(f"Error membaca serial: {e}")
@@ -132,6 +134,41 @@ def stepper_driver_loop():
             print(f"Bearing AS5600: {bearing:.2f}°")
         time.sleep(delay)
 
+# def manual_input_loop():
+#     global bearing
+#     while not stop_event.is_set():
+#         try:
+#             target = input("Masukkan target bearing (0–359): ")
+#             if stop_event.is_set():
+#                 break
+#             target = int(target)
+#             if not (0 <= target < 360):
+#                 print("Masukkan antara 0–359.")
+#                 continue
+
+#             # Menghitung perbedaan dan menggerakkan motor
+#             delta = (target - bearing + 540) % 360 - 180
+#             steps_needed = int(round(delta / steps_per_click))
+#             direction = 'R' if steps_needed > 0 else 'L'
+
+#             for _ in range(abs(steps_needed)):
+#                 arduino.write(direction.encode())
+#                 bearing += steps_per_click if direction == 'R' else -steps_per_click
+#                 bearing = normalize_bearing(bearing)
+#                 time.sleep(0.005)
+
+#             print(f"Posisi kini: {bearing:.2f}°")
+
+#         except ValueError:
+#             print("Input tidak valid. Harap masukkan angka 0–359.")
+#         except EOFError:
+#             stop_event.set()
+
+def normalize_bearing(b):
+    """Normalisasi bearing ke rentang 0-360."""
+    b = b % 360
+    return b if b >= 0 else b + 360
+
 def manual_input_loop():
     global bearing
     while not stop_event.is_set():
@@ -144,8 +181,8 @@ def manual_input_loop():
                 print("Masukkan antara 0–359.")
                 continue
 
-            # Menghitung perbedaan dan menggerakkan motor
-            delta = (target - bearing + 540) % 360 - 180
+            # Menghitung perbedaan sudut (delta) yang lebih efisien, mencari arah terkecil
+            delta = (target - bearing + 180) % 360 - 180  # Delta dengan perhitungan arah terkecil
             steps_needed = int(round(delta / steps_per_click))
             direction = 'R' if steps_needed > 0 else 'L'
 
@@ -157,12 +194,37 @@ def manual_input_loop():
 
             print(f"Posisi kini: {bearing:.2f}°")
 
+            # Pengecekan raw angle setelah pergerakan motor dan koreksi otomatis
+            target_raw = int(target * 4096 / 360)
+            auto_correct_position(target_raw)
+
         except ValueError:
             print("Input tidak valid. Harap masukkan angka 0–359.")
         except EOFError:
             stop_event.set()
 
-last_event_time = time.time()
+def auto_correct_position(target_raw):
+    """
+    Mengoreksi posisi motor hingga raw angle sesuai dengan target raw.
+    Memperhitungkan wrap-around (4096 -> 0).
+    """
+    global last_raw_value
+    tolerance = 5  # Toleransi perbedaan raw yang dapat diterima
+
+    while True:
+        delta_forward = (target_raw - last_raw_value) % 4096
+        delta_backward = (last_raw_value - target_raw) % 4096
+
+        if min(delta_forward, delta_backward) <= tolerance:
+            print(f"Posisi raw telah sesuai dengan target raw: {last_raw_value}")
+            break
+
+        if delta_forward <= delta_backward:
+            arduino.write(b'R')  # Gerak maju
+        else:
+            arduino.write(b'L')  # Gerak mundur
+        
+        time.sleep(0.005)
 
 def knob_handler(data):
     global knob_direction, last_knob_event, knob_speed_delay, last_event_time, bearing
