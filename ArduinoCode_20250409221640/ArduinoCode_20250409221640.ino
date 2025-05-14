@@ -3,6 +3,7 @@
 #include <A4988.h>
 #include <math.h> // untuk round()
 
+// Konfigurasi pin A4988
 const int Step = 9;
 const int Dir = 8;
 const int Sleep = 10;
@@ -10,9 +11,10 @@ const int MS1 = 13;
 const int MS2 = 12;
 const int MS3 = 11;
 
-const int spr = 200;
-const int Microsteps = 4;
-const int RPM = 120;
+const int spr = 200;          // Step per revolution
+const int Microsteps = 4;     // Mikrostepping
+const int RPM = 120;          // Kecepatan motor
+const int stepDelay = 20;     // Delay antar langkah motor (ms)
 
 AS5600 encoder;
 A4988 stepper(spr, Dir, Step, MS1, MS2, MS3);
@@ -23,31 +25,37 @@ int lastRaw = -1;
 void setup() {
   Serial.begin(115200);
   Wire.begin();
-  encoder.begin();  // Mulai komunikasi dengan AS5600
+  encoder.begin();  // Inisialisasi komunikasi dengan AS5600
+
   pinMode(Sleep, OUTPUT);
-  digitalWrite(Sleep, HIGH);
-  stepper.begin(RPM, Microsteps);
+  digitalWrite(Sleep, HIGH); // Aktifkan driver motor
+
+  stepper.begin(RPM, Microsteps); // Inisialisasi motor
 }
 
 void loop() {
   if (Serial.available()) {
     char c = Serial.read();
-    if (c == 'R') {
-      stepper.move(1);  // gerakkan motor satu langkah
-      delay(20);        // beri waktu motor untuk bergerak
-      sendRawValue();   // kirimkan nilai raw setelah motor bergerak
-    }
-    else if (c == 'L') {
-      stepper.move(-1);  // gerakkan motor satu langkah berlawanan arah
-      delay(20);         // beri waktu motor untuk bergerak
-      sendRawValue();    // kirimkan nilai raw setelah motor bergerak
-    }
-    else if (c == 'C') {
-      // reset jika diperlukan
+    switch (c) {
+      case 'R':
+        stepper.move(1);  // Satu langkah searah jarum jam
+        delay(stepDelay);
+        sendRawValue();
+        break;
+
+      case 'L':
+        stepper.move(-1); // Satu langkah berlawanan arah jarum jam
+        delay(stepDelay);
+        sendRawValue();
+        break;
+
+      case 'C':
+        // Untuk reset atau fungsi lain di masa depan
+        break;
     }
   }
 
-  // Cek raw angle setiap 100ms (bukan dalam loop utama, agar tidak mengganggu perintah manual)
+  // Kirim pembacaan sudut setiap 100ms hanya jika berubah
   if (millis() - lastSend > 100) {
     sendRawValue();
     lastSend = millis();
@@ -55,13 +63,14 @@ void loop() {
 }
 
 void sendRawValue() {
-  // Baca angle sensor dari AS5600
-  int rawAngle = encoder.readAngle();  // 0–4095
-  float angleDeg = (rawAngle * 360.0) / 4096.0;  // konversi ke sudut dalam derajat
+  int rawAngle = encoder.readAngle();  // Rentang 0–4095
+  if (rawAngle != lastRaw) {
+    lastRaw = rawAngle;
+    float angleDeg = (rawAngle * 360.0) / 4096.0;
 
-  // Tampilkan hasil raw angle dan angle dalam derajat
-  Serial.print("Raw Angle: ");
-  Serial.print(rawAngle);   // Nilai RAW
-  Serial.print(" | Angle (°): ");
-  Serial.println(angleDeg, 2);  // Nilai sudut dalam derajat dengan 2 desimal
+    Serial.print("Raw Angle: ");
+    Serial.print(rawAngle);
+    Serial.print(" | Angle (°): ");
+    Serial.println(angleDeg, 2);
+  }
 }
