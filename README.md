@@ -44,7 +44,7 @@ Griffin PowerMate → Python → Serial → Arduino → Stepper Motor (via A4988
 
 - [x] Real-time stepper control via Griffin knob
 - [x] Local bearing tracking via Arduino
-- [ ] Integration with external bearing (VRS / JSON)
+- [x] Integration with external bearing (VRS / JSON)
 - [ ] Real-time GUI dashboard
 - [ ] Auto-reset to home bearing
 - [ ] Toggle between Manual and Auto modes
