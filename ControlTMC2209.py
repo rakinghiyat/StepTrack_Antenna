@@ -11,8 +11,8 @@ knob_delta = 0
 lock = threading.Lock()
 accumulated_delta = 0
 
-# buffer untuk menyimpan info knob sebelum feedback datang
 last_knob_info = None
+last_manual_info = None  # <<< tambahan untuk manual input
 
 def read_knob(callback):
     def handler(data):
@@ -42,21 +42,34 @@ def send_knob_loop():
             sign = 1 if d > 0 else -1
 
             # scaling nonlinear
-            if abs_d <= 3:
-                scale = 1
-            else:
-                scale = 2
+            scale = 1 if abs_d <= 3 else 2
 
             accumulated_delta += sign * abs_d * scale
             move_steps = int(accumulated_delta)
 
             if move_steps != 0:
-                cmd = f"D{move_steps}\n"
+                cmd = f"K{move_steps}\n"   # <<< knob command
                 arduino.write(cmd.encode())
                 accumulated_delta -= move_steps
 
-                # simpan sementara info knob
                 last_knob_info = (d, scale, move_steps)
+
+def manual_input():
+    global last_manual_info
+    while True:
+        try:
+            val = input("Masukkan perintah (contoh: 200 / -200 / D90 / S1600 / C): ")
+            if val.strip() == "":
+                continue
+            if val[0].upper() in ["S", "D", "C"]:
+                cmd = val.upper() + "\n"
+            else:
+                cmd = f"S{val}\n"
+            arduino.write(cmd.encode())
+            print(f"[PYTHON] Manual dikirim: {cmd.strip()}")
+            last_manual_info = cmd.strip()  # <<< simpan info untuk log feedback
+        except Exception as e:
+            print("Error input:", e)
 
 # Setup PowerMate
 filter = hid.HidDeviceFilter(vendor_id=0x077d)
@@ -65,9 +78,10 @@ if devices:
     device = devices[0]
     device.open()
     device.set_raw_data_handler(read_knob(knob_callback))
-    print("PowerMate siap digunakan (Closed-loop knob).")
+    print("PowerMate siap digunakan (Closed-loop).")
 
     threading.Thread(target=send_knob_loop, daemon=True).start()
+    threading.Thread(target=manual_input, daemon=True).start()
 
     try:
         while True:
@@ -77,15 +91,17 @@ if devices:
                     rawAngle, angleDeg = line.split(",")
                     rawAngle = int(rawAngle)
                     angleDeg = float(angleDeg)
+                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
                     if last_knob_info:
                         d, scale, move_steps = last_knob_info
+                        print(f"Knob {d} | Scale {scale} | Move {move_steps} | Raw {rawAngle} | Bearing {angleDeg:.2f} | Time {timestamp}")
+                        last_knob_info = None
 
-                        # buat timestamp format HH:MM:SS.mmm
-                        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    elif last_manual_info:
+                        print(f"[PYTHON] Manual {last_manual_info} | Raw {rawAngle} | Bearing {angleDeg:.2f} | Time {timestamp}")
+                        last_manual_info = None
 
-                        print(f"Knob {d} | Scale {scale} | Move {move_steps} | Raw {rawAngle} | Bearing {angleDeg:.2f} | Time  {timestamp}")
-                        last_knob_info = None  # reset setelah dicetak
                 except:
                     pass
             time.sleep(0.01)
