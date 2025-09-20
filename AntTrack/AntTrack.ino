@@ -29,7 +29,7 @@ void setup() {
   stepper.setMaxSpeed(5000);
   stepper.setAcceleration(8000);
 
-  Serial.println("[ARDUINO] Ready (Knob + AS5600 closed-loop)");
+  Serial.println("[ARDUINO] Ready (Knob + Manual Relative + Manual Absolute)");
 }
 
 void loop() {
@@ -45,16 +45,42 @@ void loop() {
 // --------------------
 void processCommand(String cmd) {
   cmd.trim();
-  if (cmd.startsWith("D")) {
+
+  if (cmd.startsWith("K")) {
+    // Knob (relative steps → sama logic dengan stable)
     long deg = cmd.substring(1).toInt();
     long steps = deg * stepsPerDegree;
 
     targetSteps += steps;
     stepper.moveTo(targetSteps);
+    sendFeedback();
+  }
+  else if (cmd.startsWith("S")) {
+    // Manual relative steps
+    long steps = cmd.substring(1).toInt();
+    targetSteps += steps;
+    stepper.moveTo(targetSteps);
+    sendFeedback();
+  }
+  else if (cmd.startsWith("D")) {
+    // Manual absolute degrees
+    long targetDeg = cmd.substring(1).toInt();
 
-    sendFeedback();   // kirim data encoder segera
+    int rawAngle = encoder.rawAngle(); // 0–4095
+    float currentDeg = (rawAngle * 360.0) / 4096.0;
+
+    float deltaDeg = targetDeg - currentDeg;
+    while (deltaDeg > 180) deltaDeg -= 360;
+    while (deltaDeg < -180) deltaDeg += 360;
+
+    long deltaSteps = deltaDeg * stepsPerDegree;
+    targetSteps += deltaSteps;
+    stepper.moveTo(targetSteps);
+
+    sendFeedback();
   }
   else if (cmd == "C") {
+    // Reset posisi
     stepper.setCurrentPosition(0);
     targetSteps = 0;
     sendFeedback();
