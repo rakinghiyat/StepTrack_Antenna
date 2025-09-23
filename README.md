@@ -16,14 +16,14 @@ A compact and innovative auto-tracking antenna system using a stepper motor, Ard
 
 ## 🛠️ System Architecture
 
-Griffin PowerMate → Python → Serial → Arduino → Stepper Motor (via A4988) ↑ Serial Bearing Feedback
+Griffin PowerMate → Python → Serial → Arduino → Stepper Motor (via A4988 or TMC2209) ↑ Serial Bearing Feedback
 
 ---
 
 ## 📦 Hardware & Tools
 
 - Arduino Mega / Uno
-- A4988 Stepper Motor Driver
+- A4988 / TMC2209 Stepper Motor Driver
 - 200 SPR Stepper Motor
 - Griffin PowerMate USB knob
 - Python (with `pywinusb`, `pyserial`)
