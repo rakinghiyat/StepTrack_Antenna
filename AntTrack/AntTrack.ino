@@ -15,12 +15,15 @@ const int stepsPerRev = 200;
 const int microstep   = 16;
 const float stepsPerDegree = (stepsPerRev * microstep) / 360.0;
 
+// --------------------
+// Toleransi (dalam derajat) hanya untuk perintah D dan S
+const float toleranceDeg = 1.0;  
+
 long targetSteps = 0;  // posisi target (absolute)
 
 void setup() {
   Serial.begin(115200);
   Wire.begin();
-
   encoder.begin();
 
   pinMode(EN_PIN, OUTPUT);
@@ -39,6 +42,7 @@ void loop() {
     processCommand(cmd);
   }
 
+  // Knob movement tetap realtime
   stepper.run();
 }
 
@@ -47,42 +51,73 @@ void processCommand(String cmd) {
   cmd.trim();
 
   if (cmd.startsWith("K")) {
-    // Knob (relative steps → sama logic dengan stable)
+    // Knob (relative steps, realtime)
     long deg = cmd.substring(1).toInt();
     long steps = deg * stepsPerDegree;
 
     targetSteps += steps;
     stepper.moveTo(targetSteps);
-    sendFeedback();
-  }
-  else if (cmd.startsWith("S")) {
-    // Manual relative steps
-    long steps = cmd.substring(1).toInt();
-    targetSteps += steps;
-    stepper.moveTo(targetSteps);
-    sendFeedback();
-  }
-  else if (cmd.startsWith("D")) {
-    // Manual absolute degrees
-    long targetDeg = cmd.substring(1).toInt();
 
+    // Kirim log posisi terakhir, tapi motor tetap berjalan
+    sendFeedback();
+  }
+  else if (cmd.startsWith("S") || cmd.startsWith("D")) {
+    // Manual input → tunggu sampai motor sampai target
+    long deltaSteps = 0;
+    float deltaDeg = 0;
+
+    if (cmd.startsWith("S")) {
+      deltaSteps = cmd.substring(1).toInt();
+      deltaDeg = deltaSteps / stepsPerDegree;
+    }
+    else if (cmd.startsWith("D")) {
+      long targetDeg = cmd.substring(1).toInt();
+      int rawAngle = encoder.rawAngle(); // 0–4095
+      float currentDeg = (rawAngle * 360.0) / 4096.0;
+      deltaDeg = targetDeg - currentDeg;
+      while (deltaDeg > 180) deltaDeg -= 360;
+      while (deltaDeg < -180) deltaDeg += 360;
+      deltaSteps = deltaDeg * stepsPerDegree;
+    }
+
+    // Terapkan toleransi
+    if (fabs(deltaDeg) < toleranceDeg) {
+      // Tidak usah gerak, tapi tetap kirim feedback
+      sendFeedback();
+      return;
+    }
+
+    targetSteps += deltaSteps;
+    stepper.moveTo(targetSteps);
+
+    // Tunggu sampai motor sampai
+    stepper.runToPosition();
+
+    // Kirim log posisi akhir (bearing akurat)
+    sendFeedback();
+  }
+  else if (cmd == "C") {
+    // Ambil posisi sekarang
     int rawAngle = encoder.rawAngle(); // 0–4095
     float currentDeg = (rawAngle * 360.0) / 4096.0;
 
-    float deltaDeg = targetDeg - currentDeg;
+    // Hitung delta untuk ke 0°
+    float deltaDeg = -currentDeg;
     while (deltaDeg > 180) deltaDeg -= 360;
     while (deltaDeg < -180) deltaDeg += 360;
 
     long deltaSteps = deltaDeg * stepsPerDegree;
+
     targetSteps += deltaSteps;
     stepper.moveTo(targetSteps);
 
-    sendFeedback();
-  }
-  else if (cmd == "C") {
-    // Reset posisi
+    // Jalanin sampai benar-benar sampai 0°
+    stepper.runToPosition();
+
+    // Setelah sampai → set current posisi sebagai 0
     stepper.setCurrentPosition(0);
     targetSteps = 0;
+
     sendFeedback();
   }
 }
