@@ -22,32 +22,50 @@ Griffin PowerMate → Python → Serial → Arduino → Stepper Motor (via A4988
 
 ## 📦 Hardware & Tools
 
-- Arduino Mega / Uno
-- A4988 / TMC2209 Stepper Motor Driver
-- 200 SPR Stepper Motor
-- Griffin PowerMate USB knob
-- Python (with `pywinusb`, `pyserial`)
-- 12V Power Supply
+- Arduino Mega / Uno (for motor & sensor control)
+- A4988 / TMC2209 Stepper Motor Driver  
+  (TMC2209 = silent & UART features, A4988 = simple & cheap)
+- 200 SPR stepper motor (1.8°/step),  
+  up to 3200 microsteps/rev at 1/16 microstepping
+- Griffin PowerMate USB knob (manual input)
+- Python (with `pywinusb`, `pyserial`; future GUI with `tkinter`/`PyQt5`)
+- 12V Power Supply (≥2A recommended, depends on motor)
 - Optional: Virtual Radar Server / ADS-B data feed
+- Optional: RF RSSI module (for signal-based tracking)
 
 ---
 
 ## 🚀 How It Works
 
-1. **Rotate the Griffin PowerMate** — Python detects knob input and sends `R` (right) or `L` (left) via serial.
-2. **Arduino receives command** — moves the stepper accordingly and updates internal bearing.
-3. **Bearing is printed over serial** — ready for GUI or external program to visualize tracking.
+1. Rotate the Griffin PowerMate — Python detects knob rotation and sends commands (`K`, `S`, `D`, or `C`) to Arduino.
+2. Arduino interprets the command:
+   - `K`: knob input → relative movement (non-blocking, real-time)
+   - `S`: manual relative steps (blocking, until reached)
+   - `D`: manual absolute degree target (blocking, until reached)
+   - `C`: reset current bearing to 0°
+3. Arduino drives the stepper motor accordingly, using encoder feedback for precise control.
+4. Arduino prints feedback (`rawAngle, angleDeg`) over serial, which can be logged or visualized.
 
 ---
 
 ## ✅ Project Goals / Roadmap
 
+### Core Features
 - [x] Real-time stepper control via Griffin knob
 - [x] Local bearing tracking via Arduino
-- [ ] Integration with external bearing (VRS / JSON)
+- [x] Auto-reset to home bearing
 - [ ] Real-time GUI dashboard
-- [ ] Auto-reset to home bearing
-- [ ] Toggle between Manual and Auto modes
+- [ ] Mode selection between Manual and Auto modes
+
+### Advanced Features
+- [ ] Integration with external bearing (VRS/JSON)
+- [ ] Automatic tracking using RSSI signal input
+- [ ] Multi-source input fusion (ADS-B + RSSI + manual)
+
+### Reliability & Usability
+- [x] Enhanced logging with timestamps
+- [ ] Error detection & auto-correction (missed steps, encoder drift)
+- [ ] Cross-platform GUI support
 
 ---
 
