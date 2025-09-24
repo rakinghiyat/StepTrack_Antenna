@@ -62,8 +62,8 @@ def send_knob_loop():
             if move_steps != 0:
                 cmd = f"K{move_steps}\n"
                 arduino.write(cmd.encode())
+                last_knob_info = (d, scale, move_steps)  # simpan info sampai feedback diterima
                 accumulated_delta -= move_steps
-                last_knob_info = (d, scale, move_steps)
 
 # --- Thread input manual dari user ---
 def manual_input():
@@ -119,7 +119,7 @@ if devices:
                     angleDeg = float(angleDeg)
                     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
-                    # Log knob
+                    # Log knob hanya saat feedback diterima (Arduino sudah selesai)
                     if last_knob_info:
                         d, scale, move_steps = last_knob_info
                         print(f"Knob {d} | Scale {scale} | Move {move_steps} | Raw {rawAngle} | Bearing {angleDeg:.2f} | Time {timestamp}")
