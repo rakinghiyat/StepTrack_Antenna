@@ -8,35 +8,26 @@ from datetime import datetime
 arduino = serial.Serial('COM5', 115200)
 time.sleep(2)
 
-# --- Variabel Global ---
+# --- Variabel global ---
 knob_delta = 0
 accumulated_delta = 0
 lock = threading.Lock()
 
-last_knob_info = None
-last_manual_info = None
-
-# --- Handler untuk data dari knob (rotasi & tekan) ---
+# --- Handler PowerMate ---
 def read_knob(callback):
     def handler(data):
-        global last_manual_info
         rotation = data[2]
-        press = data[1]  # tombol knob ditekan
+        press = data[1]
 
-        # Handle rotasi
         if rotation > 127:
             rotation -= 256
         if rotation != 0:
             callback(rotation)
 
-        # Handle tombol ditekan → reset ke 0 derajat
-        if press != 0:
+        if press != 0:  # tombol ditekan
             arduino.write(b"C\n")
-            last_manual_info = "C"
-
     return handler
 
-# --- Callback rotasi knob ---
 def knob_callback(delta):
     global knob_delta
     with lock:
@@ -44,8 +35,8 @@ def knob_callback(delta):
 
 # --- Thread loop kirim data knob ---
 def send_knob_loop():
-    global knob_delta, accumulated_delta, last_knob_info
-    interval = 0.05  # 50 ms
+    global knob_delta, accumulated_delta
+    interval = 0.05
     while True:
         time.sleep(interval)
         with lock:
@@ -53,46 +44,45 @@ def send_knob_loop():
             knob_delta = 0
 
         if d != 0:
-            abs_d = abs(d)
             sign = 1 if d > 0 else -1
-            scale = 1 if abs_d <= 3 else 2
-            accumulated_delta += sign * abs_d * scale
+            scale = 1 if abs(d) <= 3 else 2
+            accumulated_delta += sign * abs(d) * scale
             move_steps = int(accumulated_delta)
 
             if move_steps != 0:
                 cmd = f"K{move_steps}\n"
                 arduino.write(cmd.encode())
-                last_knob_info = (d, scale, move_steps)  # simpan info sampai feedback diterima
                 accumulated_delta -= move_steps
 
-# --- Thread input manual dari user ---
+# --- Thread input manual ---
 def manual_input():
-    global last_manual_info
-    print("Masukkan perintah (contoh: 200 / -200 / D90 / S1600 / C):")
     while True:
         try:
             val = input().strip()
             if val == "":
                 continue
 
-            # Perintah manual D/S/C
-            if val[0].upper() in ["S", "D", "C"]:
-                if val[0].upper() == "D":
-                    try:
-                        target_deg = int(val[1:])
-                        if target_deg < 0 or target_deg > 360:
-                            print(f"[ERROR] Input D harus 0–360 (Anda memasukkan {target_deg})")
-                            continue
-                    except ValueError:
-                        print("[ERROR] Format D salah, gunakan D0–D360")
+            # Cek command D
+            if val[0].upper() == "D":
+                try:
+                    deg = int(val[1:])
+                    if 0 <= deg <= 360:
+                        cmd = val.upper() + "\n"
+                        arduino.write(cmd.encode())
+                    else:
+                        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        print(f"[D-SKIP] | Value {deg} out of range 0-360 | Time {timestamp}")
                         continue
+                except ValueError:
+                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    print(f"[D-SKIP] | Invalid value | Time {timestamp}")
+                    continue
+            elif val[0].upper() in ["S","C"]:
                 cmd = val.upper() + "\n"
+                arduino.write(cmd.encode())
             else:
-                # Default → relatif S
                 cmd = f"S{val}\n"
-
-            arduino.write(cmd.encode())
-            last_manual_info = cmd.strip()
+                arduino.write(cmd.encode())
 
         except Exception as e:
             print("Error input:", e)
@@ -104,7 +94,7 @@ if devices:
     device = devices[0]
     device.open()
     device.set_raw_data_handler(read_knob(knob_callback))
-    print("PowerMate siap digunakan (Closed-loop).")
+    print("[PYTHON] StepTrack Antenna READY !")
 
     threading.Thread(target=send_knob_loop, daemon=True).start()
     threading.Thread(target=manual_input, daemon=True).start()
@@ -112,31 +102,45 @@ if devices:
     try:
         while True:
             line = arduino.readline().decode('utf-8').strip()
-            if "," in line:
-                try:
-                    rawAngle, angleDeg = line.split(",")
-                    rawAngle = int(rawAngle)
-                    angleDeg = float(angleDeg)
-                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            if not line:
+                continue
 
-                    # Log knob hanya saat feedback diterima (Arduino sudah selesai)
-                    if last_knob_info:
-                        d, scale, move_steps = last_knob_info
-                        print(f"Knob {d} | Scale {scale} | Move {move_steps} | Raw {rawAngle} | Bearing {angleDeg:.2f} | Time {timestamp}")
-                        last_knob_info = None
+            parts = line.split(",")
+            label = parts[0].strip()
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
 
-                    # Log manual
-                    elif last_manual_info:
-                        cmd_type = last_manual_info[0].upper()
-                        value = last_manual_info[1:] if len(last_manual_info) > 1 else ""
-                        print(f"[Manual] {last_manual_info} | Scale 0 | Move {value} | Raw {rawAngle} | Bearing {angleDeg:.2f} | Time {timestamp}")
-                        last_manual_info = None
+            if label.startswith("[K]") and len(parts) == 3:
+                raw = int(parts[1])
+                bearing = float(parts[2])
+                print(f"[K] | Raw {raw} | Bearing {bearing:.2f} | Time {timestamp}")
 
-                except Exception as e:
-                    print("Error parsing line:", e)
+            elif (label.startswith("[S]") or label.startswith("[S-SKIP]")) and len(parts) == 3:
+                raw = int(parts[1])
+                bearing = float(parts[2])
+                print(f"[S] | Raw {raw} | Bearing {bearing:.2f} | Time {timestamp}")
 
-            time.sleep(0.01)
+            elif (label.startswith("[D]") or label.startswith("[D-SKIP]")) and len(parts) == 3:
+                raw = int(parts[1])
+                bearing = float(parts[2])
+                print(f"[D] | Raw {raw} | Bearing {bearing:.2f} | Time {timestamp}")
+
+            elif label.startswith("[C]") and len(parts) == 3:
+                raw = int(parts[1])
+                bearing = float(parts[2])
+                print(f"[C] | RESET | Raw {raw} | Bearing {bearing:.2f} | Time {timestamp}")
+
+            elif label.startswith("[SENSOR]") and len(parts) == 3:
+                raw = int(parts[1])
+                bearing = float(parts[2])
+                print(f"[SENSOR] | Raw {raw} | Bearing {bearing:.2f} | Time {timestamp}")
+
+            else:
+                print (line)
+
+            time.sleep(0.005)
 
     except KeyboardInterrupt:
         device.close()
         print("\nProgram dihentikan.")
+else:
+    print("PowerMate device tidak ditemukan.")
