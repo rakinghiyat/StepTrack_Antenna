@@ -139,6 +139,11 @@ void processCommand(String cmd) {
     sendFeedback("C");
     lastCommandRaw = encoder.rawAngle();
   }
+  else if (cmd == "Q") {
+    // --- tambahan query posisi ---
+    sendFeedback("Q");
+    lastCommandRaw = encoder.rawAngle();
+  }
 }
 
 // --------------------
