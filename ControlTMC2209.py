@@ -19,14 +19,20 @@ s_direction_red = 0
 s_direction_blue = 0
 waiting_feedback_red = False
 waiting_feedback_blue = False
+projected_bearing = 0.0   # dihitung dari knob
+actual_bearing = 0.0      # feedback dari Arduino
+display_bearing = 0.0     # yang ditampilkan di needle
 
 bearing_lock = threading.Lock()
 knob_delta = 0
 accumulated_delta = 0
 lock = threading.Lock()
 
-# --- Steps per revolution ---
-steps_per_rev = 3200  # satu putaran penuh jarum
+# --- Konfigurasi gear ---
+motor_teeth = 76
+antenna_teeth = 228
+gear_ratio = motor_teeth / antenna_teeth  # motor:antenna = 3:1
+steps_per_rev = 3200  # satu putaran penuh motor
 
 # --- Socket server (opsional) ---
 HOST = '127.0.0.1'
@@ -66,7 +72,6 @@ threading.Thread(target=ui_command_thread, daemon=True).start()
 
 # --- Helper: sesuaikan feedback (0-360) ke nilai absolut terdekat dari reference ---
 def adjust_feedback_to_reference(feedback_deg, reference_abs):
-    # pilih k sedemikian sehingga feedback_deg + 360*k dekat dengan reference_abs
     if reference_abs is None:
         return feedback_deg
     k = round((reference_abs - feedback_deg) / 360.0)
@@ -75,22 +80,64 @@ def adjust_feedback_to_reference(feedback_deg, reference_abs):
 # --- Setup Tkinter UI ---
 root = tk.Tk()
 root.title("StepTrack Antenna Monitor")
-root.geometry("900x400")
+root.geometry("1200x450")
 
-canvas = tk.Canvas(root, width=300, height=300, bg="white")
+canvas = tk.Canvas(root, width=600, height=400, bg="white")
 canvas.pack(side="left", padx=10, pady=10)
-center_x, center_y, radius = 150, 150, 120
-canvas.create_oval(center_x-radius, center_y-radius, center_x+radius, center_y+radius, outline="black")
-needle_red = canvas.create_line(center_x, center_y, center_x, center_y-radius, width=3, fill="red")
-needle_blue = canvas.create_line(center_x, center_y, center_x, center_y-radius, width=3, fill="blue")
 
+# --- Lingkaran motor ---
+motor_cx, motor_cy, motor_r = 150, 200, 100
+canvas.create_oval(motor_cx-motor_r, motor_cy-motor_r,
+                   motor_cx+motor_r, motor_cy+motor_r, outline="black")
+needle_red = canvas.create_line(motor_cx, motor_cy, motor_cx, motor_cy-motor_r,
+                                width=3, fill="red")
+needle_blue = canvas.create_line(motor_cx, motor_cy, motor_cx, motor_cy-motor_r,
+                                 width=3, fill="blue")
+
+# Teeth motor
+for i in range(motor_teeth):
+    ang = 2*math.pi * i / motor_teeth
+    x1 = motor_cx + (motor_r-5)*math.cos(ang)
+    y1 = motor_cy + (motor_r-5)*math.sin(ang)
+    x2 = motor_cx + (motor_r+5)*math.cos(ang)
+    y2 = motor_cy + (motor_r+5)*math.sin(ang)
+    canvas.create_line(x1, y1, x2, y2, fill="gray")
+
+canvas.create_text(motor_cx, motor_cy+motor_r+15, text="Motor Pulley (76 teeth)")
+
+# --- Lingkaran antenna ---
+ant_cx, ant_cy, ant_r = 450, 200, 145
+canvas.create_oval(ant_cx-ant_r, ant_cy-ant_r,
+                   ant_cx+ant_r, ant_cy+ant_r, outline="black")
+needle_ant_red = canvas.create_line(ant_cx, ant_cy, ant_cx, ant_cy-ant_r,
+                                    width=3, fill="red")
+needle_ant_blue = canvas.create_line(ant_cx, ant_cy, ant_cx, ant_cy-ant_r,
+                                     width=3, fill="blue")
+
+# Teeth antenna
+for i in range(antenna_teeth):
+    ang = 2*math.pi * i / antenna_teeth
+    x1 = ant_cx + (ant_r-5)*math.cos(ang)
+    y1 = ant_cy + (ant_r-5)*math.sin(ang)
+    x2 = ant_cx + (ant_r+5)*math.cos(ang)
+    y2 = ant_cy + (ant_r+5)*math.sin(ang)
+    canvas.create_line(x1, y1, x2, y2, fill="gray")
+
+canvas.create_text(ant_cx, ant_cy+ant_r+15, text="Antenna Pulley (228 teeth)")
+
+# --- Log dan Bearing ---
 log_text = tk.Text(root, width=40, height=25)
 log_text.pack(side="right", padx=10, pady=10)
 
 bearing_value_red = tk.StringVar(value="Red Bearing: 0.00°")
 bearing_value_blue = tk.StringVar(value="Blue Bearing: 0.00°")
-tk.Label(root, textvariable=bearing_value_red, font=("Arial", 14)).pack(side="bottom", pady=5)
-tk.Label(root, textvariable=bearing_value_blue, font=("Arial", 14)).pack(side="bottom", pady=5)
+bearing_value_ant_red = tk.StringVar(value="Antenna Red: 0.00°")
+bearing_value_ant_blue = tk.StringVar(value="Antenna Blue: 0.00°")
+
+tk.Label(root, textvariable=bearing_value_red, font=("Arial", 12)).pack(side="bottom", pady=2)
+tk.Label(root, textvariable=bearing_value_blue, font=("Arial", 12)).pack(side="bottom", pady=2)
+tk.Label(root, textvariable=bearing_value_ant_red, font=("Arial", 12)).pack(side="bottom", pady=2)
+tk.Label(root, textvariable=bearing_value_ant_blue, font=("Arial", 12)).pack(side="bottom", pady=2)
 
 # --- Entry Command D/S/C ---
 entry_frame = tk.Frame(root)
@@ -112,7 +159,6 @@ def send_command():
             deg = int(cmd[1:])
             if 0 <= deg <= 360:
                 with bearing_lock:
-                    # buat target absolut dekat posisi saat ini (hindari jump)
                     absolute_target_red = adjust_feedback_to_reference(deg, absolute_bearing_red)
                     absolute_target_blue = adjust_feedback_to_reference(deg, absolute_bearing_blue)
                     s_direction_red = 0
@@ -125,18 +171,15 @@ def send_command():
             steps = int(cmd[1:])
             with bearing_lock:
                 target_deg = (steps / steps_per_rev) * 360.0
-                # target absolut relatif ke posisi saat ini (bisa >360 atau <0)
                 absolute_target_red = absolute_bearing_red + target_deg
                 absolute_target_blue = absolute_bearing_blue + target_deg
                 s_direction_red = 1 if steps > 0 else -1
                 s_direction_blue = 1 if steps > 0 else -1
-                # setelah jarum mencapai target UI, kita akan menunggu feedback dari Arduino untuk validasi
                 waiting_feedback_red = True
                 waiting_feedback_blue = True
             arduino.write((cmd + "\n").encode())
 
         elif cmd[0] == "C":
-            # biarkan Arduino yang mengirim feedback C; kita bisa juga menandai menunggu feedback
             with bearing_lock:
                 waiting_feedback_red = True
                 waiting_feedback_blue = True
@@ -156,46 +199,38 @@ def update_needles():
     global absolute_bearing_red, absolute_bearing_blue
     global s_direction_red, s_direction_blue
     global waiting_feedback_red, waiting_feedback_blue
-    max_step_per_frame = 20  # derajat per frame (atur ini sesuai kebutuhan)
+    max_step_per_frame = 20
 
     with bearing_lock:
-        # RED
+        # --- RED (motor) ---
         if absolute_target_red is not None:
             if s_direction_red != 0:
-                # bergerak sesuai polaritas hingga mencapai absolute_target_red
                 remaining = absolute_target_red - absolute_bearing_red
                 step_mag = min(max_step_per_frame, abs(remaining))
                 step_red = s_direction_red * step_mag
-                # jika arah tanda berbeda karena sign mismatch, gunakan sign dari remaining
+                # koreksi arah bila salah
                 if (remaining < 0 and s_direction_red > 0) or (remaining > 0 and s_direction_red < 0):
-                    # arah target relatif ternyata berlawanan (misalnya karena wrap) -> perbaiki direction
                     s_direction_red = 1 if remaining > 0 else -1
                     step_red = s_direction_red * step_mag
                 absolute_bearing_red += step_red
-
-                # jika sudah sangat dekat -> snap & berhenti, tapi tetap menunggu feedback
                 if abs(absolute_bearing_red - absolute_target_red) < 0.5:
                     absolute_bearing_red = absolute_target_red
                     s_direction_red = 0
-                    # waiting_feedback_red sudah True (set saat kirim S), tunggu feedback Arduino
             else:
-                # mode D/K/C (non-S) — hanya bergerak bila tidak menunggu feedback validasi
                 if not waiting_feedback_red:
-                    if absolute_target_red is not None:
-                        # pastikan target dekat current (target sudah disesuaikan saat feedback/kirim D)
-                        remaining = absolute_target_red - absolute_bearing_red
-                        # gunakan pendekatan proporsional (halus)
-                        step_red = remaining * 0.2
-                        if abs(step_red) < 0.01:
-                            step_red = remaining
-                        absolute_bearing_red += step_red
+                    remaining = absolute_target_red - absolute_bearing_red
+                    step_red = remaining * 0.2
+                    if abs(step_red) < 0.01:
+                        step_red = remaining
+                    absolute_bearing_red += step_red
 
-        # BLUE
+        # --- BLUE (motor) ---
         if absolute_target_blue is not None:
             if s_direction_blue != 0:
                 remaining_b = absolute_target_blue - absolute_bearing_blue
                 step_mag_b = min(max_step_per_frame, abs(remaining_b))
                 step_blue = s_direction_blue * step_mag_b
+                # koreksi arah bila salah
                 if (remaining_b < 0 and s_direction_blue > 0) or (remaining_b > 0 and s_direction_blue < 0):
                     s_direction_blue = 1 if remaining_b > 0 else -1
                     step_blue = s_direction_blue * step_mag_b
@@ -203,30 +238,43 @@ def update_needles():
                 if abs(absolute_bearing_blue - absolute_target_blue) < 0.5:
                     absolute_bearing_blue = absolute_target_blue
                     s_direction_blue = 0
-                    # waiting_feedback_blue True -> tunggu feedback Arduino
             else:
                 if not waiting_feedback_blue:
-                    if absolute_target_blue is not None:
-                        remaining_b = absolute_target_blue - absolute_bearing_blue
-                        step_blue = remaining_b * 0.2
-                        if abs(step_blue) < 0.01:
-                            step_blue = remaining_b
-                        absolute_bearing_blue += step_blue
+                    remaining_b = absolute_target_blue - absolute_bearing_blue
+                    step_blue = remaining_b * 0.2
+                    if abs(step_blue) < 0.01:
+                        step_blue = remaining_b
+                    absolute_bearing_blue += step_blue
 
-        # Render (pakai modulo agar jarum tampil 0-360)
+        # --- Render motor (red/blue) ---
         bearing_red_mod = absolute_bearing_red % 360
         angle_red_rad = math.radians(bearing_red_mod - 90)
-        x_red = center_x + radius * math.cos(angle_red_rad)
-        y_red = center_y + radius * math.sin(angle_red_rad)
-        canvas.coords(needle_red, center_x, center_y, x_red, y_red)
+        x_red = motor_cx + motor_r * math.cos(angle_red_rad)
+        y_red = motor_cy + motor_r * math.sin(angle_red_rad)
+        canvas.coords(needle_red, motor_cx, motor_cy, x_red, y_red)
         bearing_value_red.set(f"Red Bearing: {bearing_red_mod:.2f}°")
 
         bearing_blue_mod = absolute_bearing_blue % 360
         angle_blue_rad = math.radians(bearing_blue_mod - 90)
-        x_blue = center_x + radius * math.cos(angle_blue_rad)
-        y_blue = center_y + radius * math.sin(angle_blue_rad)
-        canvas.coords(needle_blue, center_x, center_y, x_blue, y_blue)
+        x_blue = motor_cx + motor_r * math.cos(angle_blue_rad)
+        y_blue = motor_cy + motor_r * math.sin(angle_blue_rad)
+        canvas.coords(needle_blue, motor_cx, motor_cy, x_blue, y_blue)
         bearing_value_blue.set(f"Blue Bearing: {bearing_blue_mod:.2f}°")
+
+        # --- Render antenna (ikut gear ratio) ---
+        ant_red = (absolute_bearing_red * gear_ratio) % 360
+        ang_ant_red = math.radians(ant_red - 90)
+        ax_red = ant_cx + ant_r * math.cos(ang_ant_red)
+        ay_red = ant_cy + ant_r * math.sin(ang_ant_red)
+        canvas.coords(needle_ant_red, ant_cx, ant_cy, ax_red, ay_red)
+        bearing_value_ant_red.set(f"Antenna Red: {ant_red:.2f}°")
+
+        ant_blue = (absolute_bearing_blue * gear_ratio) % 360
+        ang_ant_blue = math.radians(ant_blue - 90)
+        ax_blue = ant_cx + ant_r * math.cos(ang_ant_blue)
+        ay_blue = ant_cy + ant_r * math.sin(ang_ant_blue)
+        canvas.coords(needle_ant_blue, ant_cx, ant_cy, ax_blue, ay_blue)
+        bearing_value_ant_blue.set(f"Antenna Blue: {ant_blue:.2f}°")
 
     root.after(20, update_needles)
 
@@ -279,18 +327,17 @@ def read_arduino():
         log_text.insert(tk.END, line + "\n")
         log_text.see(tk.END)
 
-        # --- khusus [D-SKIP] ---
-        if line.startswith("[D-SKIP]"):
-            # abaikan saja, jangan ubah jarum atau bearing
-            continue
-
         parts = line.split(",")
         if len(parts) >= 3:
             label = parts[0].strip("[]")
             try:
-                angle = float(parts[2])  # 0..360 from Arduino
+                angle = float(parts[2])  # 0..360 dari Arduino
             except:
                 continue
+
+            # perlakukan D-SKIP sama dengan D
+            if label == "D-SKIP":
+                label = "D"
 
             with bearing_lock:
                 if label == "SENSOR":
@@ -298,9 +345,7 @@ def read_arduino():
                     absolute_bearing_red = adjusted
                     absolute_target_red = adjusted
                     s_direction_red = 0
-                    # blue dibiarkan
-
-                elif label == "S":
+                elif label in ("S", "K", "D", "C", "Q"):
                     ref_red = absolute_target_red if absolute_target_red is not None else absolute_bearing_red
                     adj_red = adjust_feedback_to_reference(angle, ref_red)
                     absolute_bearing_red = adj_red
@@ -315,20 +360,16 @@ def read_arduino():
                     s_direction_blue = 0
                     waiting_feedback_blue = False
 
-                elif label in ("K", "D", "C"):
-                    ref_r = absolute_target_red if absolute_target_red is not None else absolute_bearing_red
-                    adj_r = adjust_feedback_to_reference(angle, ref_r)
-                    absolute_bearing_red = adj_r
-                    absolute_target_red = adj_r
-                    s_direction_red = 0
-                    waiting_feedback_red = False
+# --- Background request posisi awal ---
+def request_initial_position():
+    time.sleep(0.5)
+    try:
+        arduino.write(b"Q\n")
+        print("[PYTHON] Requesting initial position...")
+    except:
+        return
 
-                    ref_b = absolute_target_blue if absolute_target_blue is not None else absolute_bearing_blue
-                    adj_b = adjust_feedback_to_reference(angle, ref_b)
-                    absolute_bearing_blue = adj_b
-                    absolute_target_blue = adj_b
-                    s_direction_blue = 0
-                    waiting_feedback_blue = False
+threading.Thread(target=request_initial_position, daemon=True).start()
 
 # --- Setup PowerMate ---
 filter = hid.HidDeviceFilter(vendor_id=0x077d)
