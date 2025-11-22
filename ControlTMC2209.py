@@ -28,6 +28,10 @@ knob_delta = 0
 accumulated_delta = 0
 lock = threading.Lock()
 
+# --- Variabel revolusi ---
+last_raw_angle = None
+revolution_count = 0
+
 # --- Konfigurasi gear ---
 motor_teeth = 76
 antenna_teeth = 228
@@ -80,7 +84,7 @@ def adjust_feedback_to_reference(feedback_deg, reference_abs):
 # --- Setup Tkinter UI ---
 root = tk.Tk()
 root.title("StepTrack Antenna Monitor")
-root.geometry("1200x450")
+root.geometry("1200x500")
 
 canvas = tk.Canvas(root, width=600, height=400, bg="white")
 canvas.pack(side="left", padx=10, pady=10)
@@ -133,11 +137,13 @@ bearing_value_red = tk.StringVar(value="Red Bearing: 0.00°")
 bearing_value_blue = tk.StringVar(value="Blue Bearing: 0.00°")
 bearing_value_ant_red = tk.StringVar(value="Antenna Red: 0.00°")
 bearing_value_ant_blue = tk.StringVar(value="Antenna Blue: 0.00°")
+revolution_value = tk.StringVar(value="Revolutions: 0")
 
 tk.Label(root, textvariable=bearing_value_red, font=("Arial", 12)).pack(side="bottom", pady=2)
 tk.Label(root, textvariable=bearing_value_blue, font=("Arial", 12)).pack(side="bottom", pady=2)
 tk.Label(root, textvariable=bearing_value_ant_red, font=("Arial", 12)).pack(side="bottom", pady=2)
 tk.Label(root, textvariable=bearing_value_ant_blue, font=("Arial", 12)).pack(side="bottom", pady=2)
+tk.Label(root, textvariable=revolution_value, font=("Arial", 12, "bold")).pack(side="bottom", pady=5)
 
 # --- Entry Command D/S/C ---
 entry_frame = tk.Frame(root)
@@ -202,51 +208,35 @@ def update_needles():
     max_step_per_frame = 20
 
     with bearing_lock:
-        # --- RED (motor) ---
+        # --- RED ---
         if absolute_target_red is not None:
-            if s_direction_red != 0:
-                remaining = absolute_target_red - absolute_bearing_red
-                step_mag = min(max_step_per_frame, abs(remaining))
-                step_red = s_direction_red * step_mag
-                # koreksi arah bila salah
-                if (remaining < 0 and s_direction_red > 0) or (remaining > 0 and s_direction_red < 0):
-                    s_direction_red = 1 if remaining > 0 else -1
-                    step_red = s_direction_red * step_mag
-                absolute_bearing_red += step_red
-                if abs(absolute_bearing_red - absolute_target_red) < 0.5:
-                    absolute_bearing_red = absolute_target_red
-                    s_direction_red = 0
-            else:
-                if not waiting_feedback_red:
-                    remaining = absolute_target_red - absolute_bearing_red
-                    step_red = remaining * 0.2
-                    if abs(step_red) < 0.01:
-                        step_red = remaining
-                    absolute_bearing_red += step_red
+            remaining = absolute_target_red - absolute_bearing_red
+            step_mag = min(max_step_per_frame, abs(remaining))
+            step_red = s_direction_red * step_mag if s_direction_red != 0 else remaining * 0.2
+            if abs(step_red) < 0.01:
+                step_red = remaining
+            if (remaining < 0 and step_red > 0) or (remaining > 0 and step_red < 0):
+                step_red = -step_red
+            absolute_bearing_red += step_red
+            if abs(absolute_bearing_red - absolute_target_red) < 0.5:
+                absolute_bearing_red = absolute_target_red
+                s_direction_red = 0
 
-        # --- BLUE (motor) ---
+        # --- BLUE ---
         if absolute_target_blue is not None:
-            if s_direction_blue != 0:
-                remaining_b = absolute_target_blue - absolute_bearing_blue
-                step_mag_b = min(max_step_per_frame, abs(remaining_b))
-                step_blue = s_direction_blue * step_mag_b
-                # koreksi arah bila salah
-                if (remaining_b < 0 and s_direction_blue > 0) or (remaining_b > 0 and s_direction_blue < 0):
-                    s_direction_blue = 1 if remaining_b > 0 else -1
-                    step_blue = s_direction_blue * step_mag_b
-                absolute_bearing_blue += step_blue
-                if abs(absolute_bearing_blue - absolute_target_blue) < 0.5:
-                    absolute_bearing_blue = absolute_target_blue
-                    s_direction_blue = 0
-            else:
-                if not waiting_feedback_blue:
-                    remaining_b = absolute_target_blue - absolute_bearing_blue
-                    step_blue = remaining_b * 0.2
-                    if abs(step_blue) < 0.01:
-                        step_blue = remaining_b
-                    absolute_bearing_blue += step_blue
+            remaining_b = absolute_target_blue - absolute_bearing_blue
+            step_mag_b = min(max_step_per_frame, abs(remaining_b))
+            step_blue = s_direction_blue * step_mag_b if s_direction_blue != 0 else remaining_b * 0.2
+            if abs(step_blue) < 0.01:
+                step_blue = remaining_b
+            if (remaining_b < 0 and step_blue > 0) or (remaining_b > 0 and step_blue < 0):
+                step_blue = -step_blue
+            absolute_bearing_blue += step_blue
+            if abs(absolute_bearing_blue - absolute_target_blue) < 0.5:
+                absolute_bearing_blue = absolute_target_blue
+                s_direction_blue = 0
 
-        # --- Render motor (red/blue) ---
+        # --- Render motor dan antenna ---
         bearing_red_mod = absolute_bearing_red % 360
         angle_red_rad = math.radians(bearing_red_mod - 90)
         x_red = motor_cx + motor_r * math.cos(angle_red_rad)
@@ -261,7 +251,6 @@ def update_needles():
         canvas.coords(needle_blue, motor_cx, motor_cy, x_blue, y_blue)
         bearing_value_blue.set(f"Blue Bearing: {bearing_blue_mod:.2f}°")
 
-        # --- Render antenna (ikut gear ratio) ---
         ant_red = (absolute_bearing_red * gear_ratio) % 360
         ang_ant_red = math.radians(ant_red - 90)
         ax_red = ant_cx + ant_r * math.cos(ang_ant_red)
@@ -275,6 +264,8 @@ def update_needles():
         ay_blue = ant_cy + ant_r * math.sin(ang_ant_blue)
         canvas.coords(needle_ant_blue, ant_cx, ant_cy, ax_blue, ay_blue)
         bearing_value_ant_blue.set(f"Antenna Blue: {ant_blue:.2f}°")
+
+        revolution_value.set(f"Revolutions: {revolution_count}")
 
     root.after(20, update_needles)
 
@@ -319,6 +310,7 @@ def read_arduino():
     global absolute_bearing_red, absolute_bearing_blue
     global s_direction_red, s_direction_blue
     global waiting_feedback_red, waiting_feedback_blue
+    global last_raw_angle, revolution_count
 
     while True:
         line = arduino.readline().decode('utf-8').strip()
@@ -328,37 +320,58 @@ def read_arduino():
         log_text.see(tk.END)
 
         parts = line.split(",")
-        if len(parts) >= 3:
-            label = parts[0].strip("[]")
-            try:
-                angle = float(parts[2])  # 0..360 dari Arduino
-            except:
-                continue
+        if len(parts) < 3:
+            continue
 
-            # perlakukan D-SKIP sama dengan D
-            if label == "D-SKIP":
-                label = "D"
+        label = parts[0].strip("[]")
+        try:
+            raw_angle = float(parts[1])
+            angle_deg = float(parts[2])
+        except:
+            continue
 
-            with bearing_lock:
-                if label == "SENSOR":
-                    adjusted = adjust_feedback_to_reference(angle, absolute_bearing_red)
-                    absolute_bearing_red = adjusted
-                    absolute_target_red = adjusted
-                    s_direction_red = 0
-                elif label in ("S", "K", "D", "C", "Q"):
-                    ref_red = absolute_target_red if absolute_target_red is not None else absolute_bearing_red
-                    adj_red = adjust_feedback_to_reference(angle, ref_red)
-                    absolute_bearing_red = adj_red
-                    absolute_target_red = adj_red
-                    s_direction_red = 0
-                    waiting_feedback_red = False
+        # --- Hitung revolusi berdasarkan raw_angle ---
+        if last_raw_angle is not None:
+            diff = raw_angle - last_raw_angle
+            if diff > 2048:   # wrap mundur
+                revolution_count -= 1
+            elif diff < -2048:  # wrap maju
+                revolution_count += 1
+        last_raw_angle = raw_angle
 
-                    ref_blue = absolute_target_blue if absolute_target_blue is not None else absolute_bearing_blue
-                    adj_blue = adjust_feedback_to_reference(angle, ref_blue)
-                    absolute_bearing_blue = adj_blue
-                    absolute_target_blue = adj_blue
-                    s_direction_blue = 0
-                    waiting_feedback_blue = False
+        if label == "D-SKIP":
+            label = "D"
+
+        with bearing_lock:
+            if label == "SENSOR":
+                adjusted = adjust_feedback_to_reference(angle_deg, absolute_bearing_red)
+                absolute_bearing_red = adjusted
+                absolute_target_red = adjusted
+                s_direction_red = 0
+                waiting_feedback_red = False
+            elif label in ("K", "D", "S", "Q"):
+                ref_r = absolute_target_red if absolute_target_red is not None else absolute_bearing_red
+                adj_r = adjust_feedback_to_reference(angle_deg, ref_r)
+                absolute_target_red = adj_r
+                s_direction_red = 1 if adj_r > absolute_bearing_red else -1
+                waiting_feedback_red = True
+
+                ref_b = absolute_target_blue if absolute_target_blue is not None else absolute_bearing_blue
+                adj_b = adjust_feedback_to_reference(angle_deg, ref_b)
+                absolute_target_blue = adj_b
+                s_direction_blue = 1 if adj_b > absolute_bearing_blue else -1
+                waiting_feedback_blue = True
+            elif label == "C":
+                ref_r = absolute_target_red if absolute_target_red is not None else absolute_bearing_red
+                adj_r = adjust_feedback_to_reference(angle_deg, ref_r)
+                absolute_target_red = adj_r
+                s_direction_red = 1 if adj_r > absolute_bearing_red else -1
+                waiting_feedback_red = True
+
+                adj_b = adjust_feedback_to_reference(angle_deg, absolute_bearing_blue)
+                absolute_target_blue = adj_b
+                s_direction_blue = 1 if adj_b > absolute_bearing_blue else -1
+                waiting_feedback_blue = True
 
 # --- Background request posisi awal ---
 def request_initial_position():
