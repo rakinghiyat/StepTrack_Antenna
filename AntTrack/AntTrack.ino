@@ -1,6 +1,7 @@
 #include <AccelStepper.h>
 #include <Wire.h>
 #include <AS5600.h>
+#include <HMC5883L.h>   // Library HMC5883L
 
 // --- Pin TMC2209 ---
 #define DIR_PIN     8
@@ -9,13 +10,14 @@
 
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 AS5600 encoder;
+HMC5883L compass;      // Objek kompas
 
 // Stepper config
 const int stepsPerRev = 200;
 const int microstep   = 16;
 const float stepsPerDegree = (stepsPerRev * microstep) / 360.0;
 
-// Toleransi (deg) untuk D/S dan sensor
+// Toleransi (deg)
 const float toleranceDeg = 1.0;
 
 long targetSteps = 0;
@@ -31,11 +33,24 @@ unsigned long lastSensorCheck = 0;
 void setup() {
   Serial.begin(115200);
   Wire.begin();
+
+  // --- AS5600 ---
   encoder.begin();
 
+  // --- HMC5883L ---
+  if (!compass.begin()) {
+    Serial.println("[ERROR] HMC5883L tidak terdeteksi!");
+  } else {
+    compass.setRange(HMC5883L_RANGE_1_3GA);         // Range default
+    compass.setMeasurementMode(HMC5883L_CONTINOUS);
+    compass.setDataRate(HMC5883L_DATARATE_30HZ);    // 30Hz refresh
+    compass.setSamples(HMC5883L_SAMPLES_8);         // sampling rata-rata
+    Serial.println("[HMC5883L] OK");
+  }
+
+  // --- Stepper ---
   pinMode(EN_PIN, OUTPUT);
   digitalWrite(EN_PIN, LOW);
-
   stepper.setMaxSpeed(15000);      // knob cepat
   stepper.setAcceleration(30000);  // knob cepat
 
@@ -95,7 +110,6 @@ void processCommand(String cmd) {
   else if (cmd.startsWith("D")) {
     long targetDeg = cmd.substring(1).toInt();
 
-    // batasan D 0-360
     if (targetDeg < 0 || targetDeg > 360) {
       sendFeedback("D-SKIP");
       lastCommandRaw = encoder.rawAngle();
@@ -140,7 +154,6 @@ void processCommand(String cmd) {
     lastCommandRaw = encoder.rawAngle();
   }
   else if (cmd == "Q") {
-    // --- tambahan query posisi ---
     sendFeedback("Q");
     lastCommandRaw = encoder.rawAngle();
   }
@@ -151,13 +164,21 @@ void sendFeedback(const char* label) {
   int rawAngle = encoder.rawAngle();
   float angleDeg = (rawAngle * 360.0) / 4096.0;
 
+  // --- Data HMC5883L ---
+  Vector norm = compass.readNormalize();
+  float heading = atan2(norm.YAxis, norm.XAxis) * 180.0 / PI;
+  if (heading < 0) heading += 360.0;   // Normalisasi ke 0–360
+
   Serial.print("[");
   Serial.print(label);
   Serial.print("],");
   Serial.print(rawAngle);
   Serial.print(",");
-  Serial.println(angleDeg, 2);
+  Serial.print(angleDeg, 2);
+  Serial.print(",");
+  Serial.println(heading, 2);
 }
+
 
 // --------------------
 void checkSensor() {
@@ -168,20 +189,25 @@ void checkSensor() {
   int raw = encoder.rawAngle();
   int deltaRaw = abs(raw - lastRawAngle);
 
-  // hitung delta deg dengan wrap-around
   float deltaDeg = ((raw - lastCommandRaw) * 360.0 / 4096.0);
   while (deltaDeg > 180) deltaDeg -= 360;
   while (deltaDeg < -180) deltaDeg += 360;
   deltaDeg = fabs(deltaDeg);
 
-  // hanya print sensor jika perubahan > 2 raw dan > toleransi deg
   if (deltaRaw > 2 && deltaDeg > toleranceDeg) {
     if (!motorActive) {
       float angleDeg = (raw * 360.0) / 4096.0;
-      Serial.print("[SENSOR],");
+
+      Vector norm = compass.readNormalize();
+      float heading = atan2(norm.YAxis, norm.XAxis) * 180.0 / PI;
+      if (heading < 0) heading += 360.0;
+
+      Serial.print("[SENSOR],AS5600,");
       Serial.print(raw);
       Serial.print(",");
-      Serial.println(angleDeg, 2);
+      Serial.print(angleDeg, 2);
+      Serial.print(",HMC5883L,");
+      Serial.println(heading, 2);
     }
   }
 
